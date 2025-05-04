@@ -1,0 +1,65 @@
+
+# Dependencias - Construyo una "maquina virtual" con todas la dependencias (node-modules)
+FROM node:23-alpine3.20 as deps
+
+WORKDIR /usr/src/app
+
+COPY package.json ./
+COPY package-lock.json ./
+
+RUN npm install
+
+
+
+
+# Builder - Construye la aplicacion
+FROM node:23-alpine3.20 as build
+
+# Argumento recibido desde docker compose
+ARG ORDERS_DATABASE_URL
+
+# Se asigna el valor del argumento recibido a la variable de entorno
+ENV DATABASE_URL=${ORDERS_DATABASE_URL}
+
+WORKDIR /usr/src/app
+
+# Copiar de deps los modules de node
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+
+# Copiar todo el codigo fuente de la aplicacion excepto lo definido en dockerignore
+COPY . .
+
+RUN npx prisma migrate deploy
+RUN npx prisma generate
+
+# Crea la carpeta de distribucion
+RUN npm run build
+
+# Limpiar todos los modulos de node que no se utilicen en produccion para reducir el archivo
+RUN npm ci -f --only=production && npm cache clean --force
+
+
+# Crear la imagen final de Docker
+FROM node:23-alpine3.20 as prod
+
+WORKDIR /usr/src/app
+
+# Copiar los modulos de node de la etapa anterior
+COPY --from=build /usr/src/app/node_modules ./node_modules
+
+# Copiar la carpeta de distribucion (DIST)
+COPY --from=build /usr/src/app/dist ./dist
+
+# Crea una variable de entorno indicando que la imagen es de produccion
+ENV NODE_ENV=production
+
+# Se crea un usuario para que ejecute las instrucciones siguientes
+USER node
+
+# Exposicion de puertos
+EXPOSE 3000
+
+# Ejecuta la aplicacion
+CMD [ "node", "dist/main.js" ]
+
+
